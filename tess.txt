@@ -1,0 +1,144 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// ==========================================
+// 1. PENGATURAN WIFI & DATABASE
+// ==========================================
+const char* ssid = "iPhone XR";
+const char* password = "besarUSAHA";
+
+// URL disesuaikan ke tabel baru: sensor_validasi
+const char* supabase_url = "https://jxbtoxxmjlijjmhbdnuz.supabase.co/rest/v1/sensor_validasi";
+// Menggunakan key yang sama persis dengan Alat ke-1 Anda
+const char* supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YnRveHhtamxpamptaGJkbnV6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NjcwMzIsImV4cCI6MjA4OTE0MzAzMn0.kaXXhBIB24q42sUs9-pIkOjkfh0SlSeiumutGRoohFs"; 
+
+// ==========================================
+// 2. PENGATURAN PIN HARDWARE SENSOR
+// ==========================================
+#define DHTPIN 4          // Pin DHT22 terhubung ke D4
+#define DHTTYPE DHT22     // Jenis sensor DHT22
+#define MQ137_PIN 34      // Pin Analog MQ-137 terhubung ke D34
+
+// ==========================================
+// 3. PENGATURAN OLED
+// ==========================================
+#define SCREEN_WIDTH 128  
+#define SCREEN_HEIGHT 64  
+#define OLED_RESET -1     
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+DHT dht(DHTPIN, DHTTYPE);
+
+// Threshold Kalibrasi Sensor
+const int BATAS_SEGAR = 800;       
+const int BATAS_KURANG_SEGAR = 1800; 
+
+void setup() {
+  Serial.begin(115200);
+  
+  dht.begin();
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+    Serial.println(F("OLED gagal diinisialisasi"));
+    for(;;); 
+  }
+
+  // Tampilan Mencari Koneksi
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(15, 20);
+  display.println("Menghubungkan");
+  display.setCursor(15, 35);
+  display.println("Ke WiFi...");
+  display.display();
+
+  // Proses Koneksi WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Terhubung!");
+  
+  display.clearDisplay();
+  display.setCursor(15, 30);
+  display.println("Sistem IoT Siap!");
+  display.display();
+  delay(2000);
+}
+
+void loop() {
+  // 1. Membaca Sensor Suhu & Kelembapan
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  if (isnan(h) || isnan(t)) {
+    h = 0.0;
+    t = 0.0;
+  }
+
+  // 2. Membaca Sensor Gas Amonia
+  int nilaiAmonia = analogRead(MQ137_PIN);
+
+  // 3. Klasifikasi Logika Sensor Kualitas Ikan
+  String statusIkan = "";
+  if (nilaiAmonia <= BATAS_SEGAR) {
+    statusIkan = "SEGAR";
+  } else if (nilaiAmonia > BATAS_SEGAR && nilaiAmonia <= BATAS_KURANG_SEGAR) {
+    statusIkan = "KRG SEGAR";
+  } else {
+    statusIkan = "BUSUK!";
+  }
+
+  // 4. Print Status ke Layar OLED Alat ke-2
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Suhu: "); display.print(t, 1); display.print("C");
+  display.setCursor(0, 12);
+  display.print("Lembap: "); display.print(h, 1); display.print("%");
+  display.setCursor(0, 30);
+  display.print("Kadar Gas: "); display.print(nilaiAmonia);
+  
+  display.setTextSize(2); 
+  if(statusIkan == "SEGAR") display.setCursor(35, 45);
+  else if(statusIkan == "KRG SEGAR") display.setCursor(10, 45);
+  else display.setCursor(30, 45);
+  display.print(statusIkan);
+  display.display();
+
+  // 5. JURUS KIRIM DATA KE SUPABASE (Mengikuti pola Alat ke-1)
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(supabase_url);
+    
+    // Memasukkan header otentikasi tanpa variabel terpisah (Sama seperti Alat ke-1)
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", supabase_key);
+    http.addHeader("Authorization", String("Bearer ") + String(supabase_key));
+    http.addHeader("Prefer", "return=minimal");
+
+    // Format JSON data sensor
+    String jsonPayload = "{\"suhu\":" + String(t) + ", \"kelembapan\":" + String(h) + ", \"kadar_amonia\":" + String(nilaiAmonia) + ", \"status_ikan\":\"" + statusIkan + "\"}";
+    
+    int httpResponseCode = http.POST(jsonPayload);
+    
+    if (httpResponseCode > 0) {
+      Serial.print("[IoT] Data Sensor Terkirim. Code: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("[ERROR] Gagal kirim sensor. Code: ");
+      Serial.println(httpResponseCode);
+    }
+    http.end();
+  } else {
+    Serial.println("[WIFI] Koneksi Terputus, Gagal Mengirim Data.");
+  }
+
+  // Jeda pengiriman data ke web setiap 5 detik
+  delay(5000); 
+}

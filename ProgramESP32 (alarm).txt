@@ -1,0 +1,165 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+
+// ==========================================
+// 1. PENGATURAN WIFI & DATABASE
+// ==========================================
+const char* ssid = "iPhone XR";
+const char* password = "besarUSAHA";
+
+// URL & Key sudah 100% siap pakai
+const char* supabase_url = "https://jxbtoxxmjlijjmhbdnuz.supabase.co/rest/v1/log_alarm?select=id_log,status_hardware&order=waktu_kejadian.desc&limit=1";
+const char* supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YnRveHhtamxpamptaGJkbnV6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NjcwMzIsImV4cCI6MjA4OTE0MzAzMn0.kaXXhBIB24q42sUs9-pIkOjkfh0SlSeiumutGRoohFs"; 
+
+// ==========================================
+// 2. DEFINISI PIN HARDWARE
+// ==========================================
+const int pinMerah = 21;
+const int pinKuning = 22;
+const int pinHijau = 19;
+const int pinBuzzer1 = 23;
+const int pinBuzzer2 = 25;
+
+// --- Variabel Penanda ---
+String last_id_log = "START";
+bool isFirstCheck = true;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(pinMerah, OUTPUT);
+  pinMode(pinKuning, OUTPUT);
+  pinMode(pinHijau, OUTPUT);
+  pinMode(pinBuzzer1, OUTPUT);
+  pinMode(pinBuzzer2, OUTPUT);
+
+  matikanSemua();
+  Serial.println("\n[SISTEM] Memulai perangkat IoT...");
+  
+  // Panggil fungsi koneksi WiFi di awal
+  pastikanWiFiTerhubung(); 
+}
+
+void loop() {
+  // 1. CEK KONDISI WIFI SETIAP SAAT (AUTO-RECONNECT)
+  // Jika putus, fungsi ini akan menahan program dan mengedipkan lampu kuning sampai nyambung lagi
+  pastikanWiFiTerhubung();
+
+  // 2. JIKA WIFI AMAN, LANJUT CEK DATABASE
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(supabase_url);
+    http.addHeader("apikey", supabase_key);
+    http.addHeader("Authorization", String("Bearer ") + String(supabase_key));
+
+    int httpCode = http.GET(); 
+
+    if (httpCode > 0) {
+      String payload = http.getString();
+      
+      // Serial.println("\n[DEBUG] Cek Database..."); // Boleh dihapus/dikomentari kalau sudah tidak butuh
+      
+      JsonDocument doc; 
+      DeserializationError error = deserializeJson(doc, payload);
+
+      if (!error) {
+        if (doc.size() > 0) {
+          String current_id = doc[0]["id_log"].as<String>();
+          String status_hw = doc[0]["status_hardware"].as<String>();
+
+          if (isFirstCheck) {
+            last_id_log = current_id;
+            isFirstCheck = false;
+            Serial.println("[SISTEM] Database terhubung. Standby memantau...");
+          } 
+          else {
+            if (current_id != last_id_log) {
+              if (status_hw.indexOf("Aktif") >= 0) {
+                Serial.println("[ALARM] KASUS BARU TERDETEKSI! MENGAKTIFKAN SIRINE!");
+                nyalakanAlarmDini();
+              }
+              last_id_log = current_id; 
+            }
+          }
+        } else {
+          if (isFirstCheck) {
+            last_id_log = "EMPTY";
+            isFirstCheck = false;
+            Serial.println("[SISTEM] Database kosong. Standby memantau...");
+          }
+        }
+      } else {
+        Serial.print("[ERROR] Gagal membaca JSON: ");
+        Serial.println(error.c_str());
+      }
+    } else {
+      Serial.print("[ERROR] Gagal konek HTTP. Kode Error: ");
+      Serial.println(httpCode);
+    }
+    http.end();
+  }
+  
+  delay(3000); 
+}
+
+// ==========================================
+// 3. FUNGSI-FUNGSI PENDUKUNG
+// ==========================================
+
+// Fungsi Baru: Memastikan WiFi Terhubung & Auto-Reconnect
+void pastikanWiFiTerhubung() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n[WIFI] Peringatan! WiFi Terputus.");
+    Serial.println("[WIFI] Mencoba menyambung kembali ke: " + String(ssid));
+    
+    // Matikan lampu lain dan buzzer (jaga-jaga kalau putus pas alarm bunyi)
+    matikanSemua(); 
+    
+    // Putuskan sisa koneksi lama, lalu mulai ulang
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+
+    // Kedipkan lampu KUNING selama masih mencari sinyal
+    while (WiFi.status() != WL_CONNECTED) {
+      digitalWrite(pinKuning, HIGH);
+      delay(250);
+      digitalWrite(pinKuning, LOW);
+      delay(250);
+      Serial.print(".");
+    }
+
+    // Jika berhasil keluar dari loop atas, berarti sudah tersambung lagi!
+    Serial.println("\n[WIFI] Berhasil Terhubung Kembali!");
+    digitalWrite(pinKuning, LOW);
+    digitalWrite(pinHijau, HIGH); // Nyalakan hijau tanda aman
+  }
+}
+
+void nyalakanAlarmDini() {
+  digitalWrite(pinHijau, LOW); 
+
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(pinMerah, HIGH);
+    digitalWrite(pinBuzzer1, HIGH);
+    digitalWrite(pinBuzzer2, HIGH);
+    delay(500); 
+
+    digitalWrite(pinMerah, LOW);
+    digitalWrite(pinBuzzer1, LOW);
+    digitalWrite(pinBuzzer2, LOW);
+    delay(500); 
+  }
+
+  matikanSemua();
+  digitalWrite(pinHijau, HIGH);
+  Serial.println("[SISTEM] Alarm selesai. Kembali memantau...");
+}
+
+void matikanSemua() {
+  digitalWrite(pinMerah, LOW);
+  digitalWrite(pinKuning, LOW);
+  digitalWrite(pinHijau, LOW);
+  digitalWrite(pinBuzzer1, LOW);
+  digitalWrite(pinBuzzer2, LOW);
+}

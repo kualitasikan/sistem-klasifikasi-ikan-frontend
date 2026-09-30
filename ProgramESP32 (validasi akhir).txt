@@ -1,0 +1,110 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+
+// ================= PENGATURAN PIN =================
+#define DHTPIN 4          // Pin DHT22 terhubung ke D4
+#define DHTTYPE DHT22     // Jenis sensor DHT22
+#define MQ137_PIN 34      // Pin Analog MQ-137 terhubung ke D34
+
+// ================= PENGATURAN OLED =================
+#define SCREEN_WIDTH 128  // Lebar layar OLED (pixel)
+#define SCREEN_HEIGHT 64  // Tinggi layar OLED (pixel)
+#define OLED_RESET -1     // Reset pin (-1 jika menggunakan pin reset Arduino yang sama)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Inisialisasi DHT
+DHT dht(DHTPIN, DHTTYPE);
+
+// ================= AMBANG BATAS (THRESHOLD) =================
+// CATATAN: Nilai ADC ESP32 berkisar dari 0 hingga 4095.
+// ANDA HARUS MENYESUAIKAN NILAI INI saat pengujian langsung dengan ikan!
+const int BATAS_SEGAR = 800;       
+const int BATAS_KURANG_SEGAR = 1800; 
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Sistem Deteksi Kesegaran Ikan Dimulai");
+
+  // Memulai sensor DHT
+  dht.begin();
+
+  // Memulai layar OLED (alamat I2C umumnya 0x3C atau 0x3D)
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+    Serial.println(F("OLED gagal diinisialisasi"));
+    for(;;); // Berhenti di sini jika OLED gagal
+  }
+
+  // Menampilkan layar pembuka
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(15, 20);
+  display.println("Alat Deteksi");
+  display.setCursor(15, 35);
+  display.println("Kesegaran Ikan");
+  display.display();
+  delay(3000); // Tahan layar selama 3 detik
+}
+
+void loop() {
+  // 1. Membaca Suhu dan Kelembapan
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  // Periksa apakah DHT berhasil dibaca
+  if (isnan(h) || isnan(t)) {
+    Serial.println("Gagal membaca sensor DHT!");
+    h = 0.0;
+    t = 0.0;
+  }
+
+  // 2. Membaca Sensor Amonia (MQ-137)
+  int nilaiAmonia = analogRead(MQ137_PIN);
+
+  // 3. Menentukan Status Kesegaran
+  String statusIkan = "";
+  if (nilaiAmonia <= BATAS_SEGAR) {
+    statusIkan = "SEGAR";
+  } else if (nilaiAmonia > BATAS_SEGAR && nilaiAmonia <= BATAS_KURANG_SEGAR) {
+    statusIkan = "KRG SEGAR";
+  } else {
+    statusIkan = "BUSUK!";
+  }
+
+  // 4. Menampilkan ke Serial Monitor (untuk proses kalibrasi di laptop)
+  Serial.print("Suhu: "); Serial.print(t); Serial.print(" C | ");
+  Serial.print("Kelembapan: "); Serial.print(h); Serial.print(" % | ");
+  Serial.print("Nilai Gas: "); Serial.print(nilaiAmonia); Serial.print(" | ");
+  Serial.print("Status: "); Serial.println(statusIkan);
+
+  // 5. Menampilkan ke Layar OLED
+  display.clearDisplay();
+
+  // Baris 1: Suhu dan Kelembapan
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Suhu: "); display.print(t, 1); display.print("C");
+  display.setCursor(0, 12);
+  display.print("Lembap: "); display.print(h, 1); display.print("%");
+
+  // Baris 2: Nilai Gas Amonia (ADC Raw)
+  display.setCursor(0, 30);
+  display.print("Kadar Gas: "); display.print(nilaiAmonia);
+
+  // Baris 3: Status Kesegaran
+  display.setTextSize(2); // Ukuran teks diperbesar untuk status
+  
+  // Mengatur posisi teks agar terlihat di tengah (kurang lebih)
+  if(statusIkan == "SEGAR") display.setCursor(35, 45);
+  else if(statusIkan == "KRG SEGAR") display.setCursor(10, 45);
+  else display.setCursor(30, 45);
+
+  display.print(statusIkan);
+
+  display.display();
+
+  // Tunggu 2 detik sebelum pembacaan berikutnya
+  delay(2000); 
+}
